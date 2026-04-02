@@ -52,6 +52,7 @@ import FilterChips from "../components/ui/FilterChips";
 import SkeletonCards from "../components/ui/SkeletonCards";
 import EmptyState from "../components/EmptyState";
 import { useTheme } from "../context/ThemeContext";
+import { useLoading } from "../context/LoadingContext";
 
 const LazyKpiBlock = lazy(() => import("../components/dashboard/KpiBlock"));
 const LazyDashboardChartsBlock = lazy(() => import("../components/dashboard/DashboardChartsBlock"));
@@ -142,6 +143,8 @@ function buildFilterTag(filters = {}) {
     "ciudad",
     "entidad",
     "tipo_compra",
+    "t_regimen",
+    "fondo_bid",
     "procedimiento",
     "fecha_inicio",
     "fecha_fin",
@@ -249,6 +252,7 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
 
   const { isDark, setTheme } = useTheme();
   const queryClient = useQueryClient();
+  const { setLoading } = useLoading();
   const nextComparatorSeriesId = useRef(2);
   const comparatorFiltersGridRef = useRef(null);
 
@@ -553,6 +557,8 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
         entidad: [...new Set(comparatorSourceRows.map((item) => item.Entidad).filter(Boolean))],
         tipo_compra: [...new Set(comparatorSourceRows.map((item) => item.T_Compra).filter(Boolean))],
         procedimiento: [...new Set(comparatorSourceRows.map((item) => item.Procedimiento).filter(Boolean))],
+        t_regimen: [...new Set(comparatorSourceRows.map((item) => item.T_Regimen).filter(Boolean))],
+        fondo_bid: [...new Set(comparatorSourceRows.map((item) => item.Fondo_BID).filter(Boolean))],
       };
 
       return {
@@ -561,6 +567,8 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
         entidad: (catalogos?.entidades || fromRows.entidad).sort((a, b) => a.localeCompare(b, "es")),
         tipo_compra: (catalogos?.tipos_compra || fromRows.tipo_compra).sort((a, b) => a.localeCompare(b, "es")),
         procedimiento: (catalogos?.procedimientos || fromRows.procedimiento).sort((a, b) => a.localeCompare(b, "es")),
+        t_regimen: (catalogos?.regimenes || fromRows.t_regimen).sort((a, b) => String(a).localeCompare(String(b), "es")),
+        fondo_bid: (catalogos?.fondos_bid || fromRows.fondo_bid).sort((a, b) => String(a).localeCompare(String(b), "es")),
       };
     },
     [catalogos, comparatorSourceRows]
@@ -1111,13 +1119,23 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
   };
 
   const exportFullExcel = async () => {
-    const blob = await downloadPacExcel(filters);
-    saveBlob(blob, buildExportFileName("reporte-completo", filters, "xlsx"));
+    try {
+      setLoading(true);
+      const blob = await downloadPacExcel(filters);
+      saveBlob(blob, buildExportFileName("reporte-completo", filters, "xlsx"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const exportDetalleExcel = async () => {
-    const blob = await downloadPacExcel(filters);
-    saveBlob(blob, buildExportFileName("detalle-filtrado", filters, "xlsx"));
+    try {
+      setLoading(true);
+      const blob = await downloadPacExcel(filters);
+      saveBlob(blob, buildExportFileName("detalle-filtrado", filters, "xlsx"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const exportExecutivePdf = () => {
@@ -1143,8 +1161,13 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
   };
 
   const exportDashboardCsv = async () => {
-    const blob = await downloadPacCsv(filters);
-    saveBlob(blob, buildExportFileName("dashboard", filters, "csv"));
+    try {
+      setLoading(true);
+      const blob = await downloadPacCsv(filters);
+      saveBlob(blob, buildExportFileName("dashboard", filters, "csv"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const getComparatorCaptureNode = (seriesId, source = "auto") => {

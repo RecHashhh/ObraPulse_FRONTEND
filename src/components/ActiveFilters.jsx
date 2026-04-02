@@ -16,6 +16,8 @@ export default function ActiveFilters({ filters, onClearOne, onClearAll }) {
       fecha_fin: "Hasta",
       valor_min: "Valor mínimo",
       valor_max: "Valor máximo",
+        t_regimen: "Régimen",
+        fondo_bid: "Fondo BID",
     };
 
     return `${labels[key] || key}: ${value}`;

@@ -1,4 +1,5 @@
 import { downloadPacCsv, downloadPacExcel } from "../api/pacApi";
+import { useLoading } from "../context/LoadingContext";
 
 function saveBlob(blob, filename) {
   const url = window.URL.createObjectURL(blob);
@@ -10,20 +11,31 @@ function saveBlob(blob, filename) {
 }
 
 export default function ExportButtons({ filters }) {
+  const { loading, setLoading } = useLoading();
   const exportCsv = async () => {
-    const blob = await downloadPacCsv(filters);
-    saveBlob(blob, "pac_export.csv");
+    try {
+      setLoading(true);
+      const blob = await downloadPacCsv(filters);
+      saveBlob(blob, "pac_export.csv");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const exportExcel = async () => {
-    const blob = await downloadPacExcel(filters);
-    saveBlob(blob, "pac_export.xlsx");
+    try {
+      setLoading(true);
+      const blob = await downloadPacExcel(filters);
+      saveBlob(blob, "pac_export.xlsx");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="export-buttons">
-      <button onClick={exportCsv}>Exportar CSV</button>
-      <button onClick={exportExcel}>Exportar Excel</button>
+      <button onClick={exportCsv} disabled={loading}>Exportar CSV</button>
+      <button onClick={exportExcel} disabled={loading}>Exportar Excel</button>
     </div>
   );
 }

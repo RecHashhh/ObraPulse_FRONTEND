@@ -24,6 +24,8 @@ export default function PacTable({ data, page, total, pageSize, onPageChange }) 
               <th>Provincia</th>
               <th>Ciudad</th>
               <th>Tipo compra</th>
+              <th>Régimen</th>
+              <th>Fondo BID</th>
               <th>Procedimiento</th>
               <th>Descripción</th>
               <th>Valor</th>
@@ -38,6 +40,8 @@ export default function PacTable({ data, page, total, pageSize, onPageChange }) 
                   <td>{item.Provincia}</td>
                   <td>{item.Ciudad}</td>
                   <td>{item.T_Compra}</td>
+                  <td>{item.T_Regimen}</td>
+                  <td>{item.Fondo_BID}</td>
                   <td>{item.Procedimiento}</td>
                   <td>{item.Descripcion}</td>
                   <td>{formatMoney(item.V_Total_Numeric)}</td>
@@ -46,7 +50,7 @@ export default function PacTable({ data, page, total, pageSize, onPageChange }) 
               ))
             ) : (
               <tr>
-                <td colSpan="8">No hay datos</td>
+                <td colSpan="10">No hay datos</td>
               </tr>
             )}
           </tbody>

@@ -6,6 +6,8 @@ const initialState = {
   ciudad: "",
   entidad: "",
   tipo_compra: "",
+  t_regimen: "",
+  fondo_bid: "",
   procedimiento: "",
   fecha_inicio: "",
   fecha_fin: "",
@@ -116,6 +118,24 @@ export default function FilterPanel({
         <select name="tipo_compra" value={filters.tipo_compra} onChange={handleChange}>
           <option value="">Tipo de compra</option>
           {(catalogos?.tipos_compra || []).map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+
+        <select name="t_regimen" value={filters.t_regimen} onChange={handleChange}>
+          <option value="">Régimen</option>
+          {(catalogos?.regimenes || []).map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+
+        <select name="fondo_bid" value={filters.fondo_bid} onChange={handleChange}>
+          <option value="">Fondo BID</option>
+          {(catalogos?.fondos_bid || []).map((item) => (
             <option key={item} value={item}>
               {item}
             </option>

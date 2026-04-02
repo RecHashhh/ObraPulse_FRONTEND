@@ -15,6 +15,8 @@ const columns = [
   { key: "Provincia", label: "Provincia" },
   { key: "Ciudad", label: "Ciudad" },
   { key: "T_Compra", label: "Tipo compra" },
+  { key: "T_Regimen", label: "Régimen" },
+  { key: "Fondo_BID", label: "Fondo BID" },
   { key: "Procedimiento", label: "Procedimiento" },
   { key: "Descripcion", label: "Descripcion" },
   { key: "V_Total_Numeric", label: "Valor" },
@@ -39,7 +41,7 @@ export default function AdvancedTable({
     const base = !lookup
       ? data
       : data.filter((item) =>
-          [item.Entidad, item.Ciudad, item.Provincia, item.Descripcion]
+          [item.Entidad, item.Ciudad, item.Provincia, item.Descripcion, item.T_Regimen, item.Fondo_BID]
             .join(" ")
             .toLowerCase()
             .includes(lookup)
@@ -118,7 +120,7 @@ export default function AdvancedTable({
               <>
                 {topPadding > 0 ? (
                   <tr>
-                    <td colSpan="9" style={{ height: `${topPadding}px`, padding: 0 }} />
+                    <td colSpan="11" style={{ height: `${topPadding}px`, padding: 0 }} />
                   </tr>
                 ) : null}
 
@@ -130,6 +132,8 @@ export default function AdvancedTable({
                       <td>{item.Provincia}</td>
                       <td>{item.Ciudad}</td>
                       <td>{item.T_Compra}</td>
+                        <td>{item.T_Regimen}</td>
+                        <td>{item.Fondo_BID}</td>
                       <td>{item.Procedimiento}</td>
                       <td>{item.Descripcion}</td>
                       <td>{formatMoney(item.V_Total_Numeric)}</td>
@@ -149,13 +153,13 @@ export default function AdvancedTable({
 
                 {bottomPadding > 0 ? (
                   <tr>
-                    <td colSpan="9" style={{ height: `${bottomPadding}px`, padding: 0 }} />
+                    <td colSpan="11" style={{ height: `${bottomPadding}px`, padding: 0 }} />
                   </tr>
                 ) : null}
               </>
             ) : (
               <tr>
-                <td colSpan="9">No hay registros para esta busqueda.</td>
+                <td colSpan="11">No hay registros para esta busqueda.</td>
               </tr>
             )}
           </tbody>
