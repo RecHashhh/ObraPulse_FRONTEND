@@ -3,6 +3,8 @@ import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 import CommandPalette from "./CommandPalette";
 import OnboardingTour from "./OnboardingTour";
+import BookmarkPanel from "../ui/BookmarkPanel";
+import NotificationPanel from "../ui/NotificationPanel";
 import { useTheme } from "../../context/ThemeContext";
 
 const PAGE_TITLES = {
@@ -14,7 +16,21 @@ const PAGE_TITLES = {
   insights: "Alertas e Insights",
   comparador: "Comparador Analitico",
   entidad: "Perfil de Entidad",
-  configuracion: "Configuracion del Usuario",
+  configuracion: "Configuracion",
+  usuarios: "Gestion de Usuarios",
+};
+
+const PAGE_SUBTITLES = {
+  dashboard: "KPIs, distribucion y tendencias de contratacion publica",
+  detalle: "Catalogo completo de contratos — filtra, ordena y exporta",
+  territorial: "Analisis geografico por provincia, ciudad y entidad",
+  temporal: "Evolucion mensual y tendencias segun los filtros activos",
+  reportes: "Genera informes en Excel, CSV o PDF con los filtros activos",
+  insights: "Deteccion automatica de anomalias, outliers y alertas",
+  comparador: "Compara entidades, provincias o procedimientos en paralelo",
+  entidad: "Analisis detallado de una entidad: montos y procedimientos",
+  configuracion: "Administra entidades, usuarios y preferencias del sistema",
+  usuarios: "Administracion de usuarios y roles del sistema",
 };
 
 export default function AppShell({
@@ -31,10 +47,17 @@ export default function AppShell({
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteSession, setPaletteSession] = useState(0);
+  const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false);
+  const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const { toggleTheme } = useTheme();
 
   const pageTitle = useMemo(
     () => PAGE_TITLES[activePage] || "Dashboard",
+    [activePage]
+  );
+
+  const pageSubtitle = useMemo(
+    () => PAGE_SUBTITLES[activePage] || "",
     [activePage]
   );
 
@@ -71,6 +94,18 @@ export default function AppShell({
         run: () => onChangePage("insights"),
       },
       {
+        id: "open-bookmarks",
+        label: "Ver favoritos guardados",
+        description: "Contratos que has marcado como favorito",
+        run: () => setBookmarkPanelOpen(true),
+      },
+      {
+        id: "open-notifications",
+        label: "Ver alertas e insights",
+        description: "Analisis del dataset completo con umbrales configurables",
+        run: () => setNotificationPanelOpen(true),
+      },
+      {
         id: "toggle-theme",
         label: "Alternar tema",
         description: "Cambiar entre claro y oscuro",
@@ -92,6 +127,10 @@ export default function AppShell({
           return next;
         });
       }
+      if (event.key === "Escape") {
+        setBookmarkPanelOpen(false);
+        setNotificationPanelOpen(false);
+      }
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -110,6 +149,7 @@ export default function AppShell({
       <main className={`shell-main ${collapsed ? "expanded" : ""}`}>
         <Topbar
           pageTitle={pageTitle}
+          pageSubtitle={pageSubtitle}
           activeFiltersCount={activeFiltersCount}
           bookmarksCount={bookmarksCount}
           lastUpdatedAt={lastUpdatedAt}
@@ -120,6 +160,8 @@ export default function AppShell({
             setPaletteSession((value) => value + 1);
             setPaletteOpen(true);
           }}
+          onOpenBookmarks={() => setBookmarkPanelOpen(true)}
+          onOpenNotifications={() => setNotificationPanelOpen(true)}
         />
         <section className="shell-content">{children}</section>
       </main>
@@ -132,6 +174,16 @@ export default function AppShell({
       />
 
       <OnboardingTour activePage={activePage} onChangePage={onChangePage} />
+
+      <BookmarkPanel
+        open={bookmarkPanelOpen}
+        onClose={() => setBookmarkPanelOpen(false)}
+      />
+
+      <NotificationPanel
+        open={notificationPanelOpen}
+        onClose={() => setNotificationPanelOpen(false)}
+      />
     </div>
   );
 }

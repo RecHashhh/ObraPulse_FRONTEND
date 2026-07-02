@@ -40,13 +40,19 @@ import {
   downloadPacCsv,
   downloadPacExcel,
   getCatalogosDinamicos,
+  getComparadorAgregado,
   getDashboardContextual,
   getEntidadesPorProvincia,
   getPac,
+  getPacInsights,
   getTopCiudades,
   getTopProvincias,
   getTopEntidadesPorProvincia,
+  getBookmarks,
+  addBookmark as apiAddBookmark,
+  removeBookmark as apiRemoveBookmark,
 } from "../api/pacApi";
+import { STALE } from "../lib/queryClient";
 import FilterPanel from "../components/ui/FilterPanel";
 import FilterChips from "../components/ui/FilterChips";
 import SkeletonCards from "../components/ui/SkeletonCards";
@@ -213,7 +219,16 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
   });
   const [comparatorFiltersFeedback, setComparatorFiltersFeedback] = useState("");
   const [territorialLayer, setTerritorialLayer] = useState("monto");
-  const [filters, setFilters] = useState({});
+  const [filters, setFilters] = useState(() => {
+    const raw = sessionStorage.getItem("pac.jumpFilters");
+    if (raw) {
+      try {
+        sessionStorage.removeItem("pac.jumpFilters");
+        return JSON.parse(raw);
+      } catch {}
+    }
+    return {};
+  });
   const [catalogos, setCatalogos] = useState({});
   const [dashboardData, setDashboardData] = useState(null);
 
@@ -224,6 +239,9 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
   const [entitiesPage, setEntitiesPage] = useState(1);
   const [filtersWarning, setFiltersWarning] = useState("");
   const [alertThreshold, setAlertThreshold] = useState(500000);
+  const [entitySearchInput, setEntitySearchInput] = useState(filters.entidad || "");
+  const [showEntityDropdown, setShowEntityDropdown] = useState(false);
+  const entitySearchRef = useRef(null);
   const [alertsHistory, setAlertsHistory] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem(ALERTS_HISTORY_KEY) || "[]");
@@ -242,19 +260,20 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     }
   });
 
-  const [bookmarks, setBookmarks] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("pac.bookmarks") || "[]");
-    } catch {
-      return [];
-    }
-  });
+  const [bookmarks, setBookmarks] = useState([]);
 
   const { isDark, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const { setLoading } = useLoading();
   const nextComparatorSeriesId = useRef(2);
   const comparatorFiltersGridRef = useRef(null);
+
+  useEffect(() => {
+    getBookmarks()
+      .then((bms) => { if (Array.isArray(bms)) setBookmarks(bms); })
+      .catch(() => {});
+  }, []);
+
 
   const dashboardView =
     activePage === "territorial"
@@ -357,52 +376,25 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     };
   }, [comparatorFiltersApplied]);
 
+  const comparatorListFilters = useMemo(() => {
+    const toCSV = (arr) => (Array.isArray(arr) && arr.length ? arr.join(",") : undefined);
+    return {
+      entidad_list: toCSV(comparatorFiltersApplied.entidad),
+      provincia_list: toCSV(comparatorFiltersApplied.provincia),
+      ciudad_list: toCSV(comparatorFiltersApplied.ciudad),
+      tipo_compra_list: toCSV(comparatorFiltersApplied.tipo_compra),
+      procedimiento_list: toCSV(comparatorFiltersApplied.procedimiento),
+    };
+  }, [comparatorFiltersApplied]);
+
+  // Endpoint /api/pac/comparador devuelve { nombre, monto_total, total_registros, promedio_monto, minimo_monto }.
   const comparatorSourceQuery = useQuery({
-    queryKey: ["comparator-source", comparatorBaseFilters],
-    queryFn: async () => {
-      let page = 1;
-      let total = 0;
-      const allItems = [];
-
-      while (page <= COMPARATOR_MAX_PAGES) {
-        const response = await getPac({
-          ...comparatorBaseFilters,
-          page,
-          page_size: COMPARATOR_PAGE_SIZE,
-        });
-
-        const items = response?.items || [];
-        total = Number(response?.total || 0);
-        allItems.push(...items);
-
-        if (!items.length) break;
-        if (items.length < COMPARATOR_PAGE_SIZE) break;
-        if (total > 0 && allItems.length >= total) break;
-
-        page += 1;
-      }
-
-      return {
-        items: allItems,
-        total,
-      };
-    },
-    enabled:
-      activePage === "comparador" &&
-      comparatorSeries.length > 0 &&
-      (Boolean(comparatorFiltersApplied.provincia?.length) ||
-        Boolean(comparatorFiltersApplied.ciudad?.length) ||
-        Boolean(comparatorFiltersApplied.entidad?.length) ||
-        Boolean(comparatorFiltersApplied.tipo_compra?.length) ||
-        Boolean(comparatorFiltersApplied.procedimiento?.length) ||
-        Boolean(String(comparatorFiltersApplied.fecha_inicio || "").trim()) ||
-        Boolean(String(comparatorFiltersApplied.fecha_fin || "").trim()) ||
-        Boolean(String(comparatorFiltersApplied.valor_min || "").trim()) ||
-        Boolean(String(comparatorFiltersApplied.valor_max || "").trim())),
-    staleTime: Infinity,
-    gcTime: 1000 * 60 * 60,
+    queryKey: ["comparator-source", compareBy, comparatorBaseFilters, comparatorListFilters],
+    queryFn: () => getComparadorAgregado(compareBy, comparatorBaseFilters, comparatorListFilters),
+    enabled: activePage === "comparador",
+    staleTime: STALE.comparador,
+    gcTime: 10 * 60_000,
     refetchOnMount: false,
-    refetchOnReconnect: false,
     refetchOnWindowFocus: false,
   });
 
@@ -422,6 +414,25 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
         metrica,
       });
     },
+  });
+
+  const insightsQuery = useQuery({
+    queryKey: ["insights-full", alertThreshold, filters],
+    queryFn: () =>
+      getPacInsights({
+        umbral: alertThreshold,
+        ...(filters.tipo_compra && { tipo_compra: filters.tipo_compra }),
+        ...(filters.t_regimen && { t_regimen: filters.t_regimen }),
+        ...(filters.procedimiento && { procedimiento: filters.procedimiento }),
+        ...(filters.fecha_inicio && { fecha_inicio: filters.fecha_inicio }),
+        ...(filters.fecha_fin && { fecha_fin: filters.fecha_fin }),
+        ...(filters.valor_min && { valor_min: filters.valor_min }),
+        ...(filters.valor_max && { valor_max: filters.valor_max }),
+      }),
+    enabled: activePage === "insights",
+    staleTime: 2 * 60_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const provinceEntitiesQuery = useQuery({
@@ -545,130 +556,43 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     });
   }, [activePage, filters.provincia, insights]);
 
-  const comparatorSourceRows = comparatorSourceQuery.data?.items?.length
-    ? comparatorSourceQuery.data.items
-    : pacData;
-
-  const comparatorFilterOptions = useMemo(
-    () => {
-      const fromRows = {
-        provincia: [...new Set(comparatorSourceRows.map((item) => item.Provincia).filter(Boolean))],
-        ciudad: [...new Set(comparatorSourceRows.map((item) => item.Ciudad).filter(Boolean))],
-        entidad: [...new Set(comparatorSourceRows.map((item) => item.Entidad).filter(Boolean))],
-        tipo_compra: [...new Set(comparatorSourceRows.map((item) => item.T_Compra).filter(Boolean))],
-        procedimiento: [...new Set(comparatorSourceRows.map((item) => item.Procedimiento).filter(Boolean))],
-        t_regimen: [...new Set(comparatorSourceRows.map((item) => item.T_Regimen).filter(Boolean))],
-        fondo_bid: [...new Set(comparatorSourceRows.map((item) => item.Fondo_BID).filter(Boolean))],
-      };
-
-      return {
-        provincia: (catalogos?.provincias || fromRows.provincia).sort((a, b) => a.localeCompare(b, "es")),
-        ciudad: (catalogos?.ciudades || fromRows.ciudad).sort((a, b) => a.localeCompare(b, "es")),
-        entidad: (catalogos?.entidades || fromRows.entidad).sort((a, b) => a.localeCompare(b, "es")),
-        tipo_compra: (catalogos?.tipos_compra || fromRows.tipo_compra).sort((a, b) => a.localeCompare(b, "es")),
-        procedimiento: (catalogos?.procedimientos || fromRows.procedimiento).sort((a, b) => a.localeCompare(b, "es")),
-        t_regimen: (catalogos?.regimenes || fromRows.t_regimen).sort((a, b) => String(a).localeCompare(String(b), "es")),
-        fondo_bid: (catalogos?.fondos_bid || fromRows.fondo_bid).sort((a, b) => String(a).localeCompare(String(b), "es")),
-      };
-    },
-    [catalogos, comparatorSourceRows]
+  // El servidor ya devuelve los datos agrupados — no hay rows crudos que filtrar.
+  const comparatorAggregatedRows = useMemo(
+    () => (Array.isArray(comparatorSourceQuery.data) ? comparatorSourceQuery.data : []),
+    [comparatorSourceQuery.data]
   );
 
-  const comparatorFilteredRows = useMemo(() => {
-    const minValue = comparatorFiltersApplied.valor_min === "" ? null : Number(comparatorFiltersApplied.valor_min);
-    const maxValue = comparatorFiltersApplied.valor_max === "" ? null : Number(comparatorFiltersApplied.valor_max);
-    const startDate = comparatorFiltersApplied.fecha_inicio
-      ? new Date(comparatorFiltersApplied.fecha_inicio)
-      : null;
-    const endDate = comparatorFiltersApplied.fecha_fin
-      ? new Date(comparatorFiltersApplied.fecha_fin)
-      : null;
+  // Opciones de filtro usan los catálogos ya cargados (no necesitamos rows crudos).
+  const comparatorFilterOptions = useMemo(
+    () => ({
+      provincia: (catalogos?.provincias || []).sort((a, b) => a.localeCompare(b, "es")),
+      ciudad: (catalogos?.ciudades || []).sort((a, b) => a.localeCompare(b, "es")),
+      entidad: (catalogos?.entidades || []).sort((a, b) => a.localeCompare(b, "es")),
+      tipo_compra: (catalogos?.tipos_compra || []).sort((a, b) => a.localeCompare(b, "es")),
+      procedimiento: (catalogos?.procedimientos || []).sort((a, b) => a.localeCompare(b, "es")),
+      t_regimen: (catalogos?.regimenes || []).sort((a, b) => String(a).localeCompare(String(b), "es")),
+      fondo_bid: (catalogos?.fondos_bid || []).sort((a, b) => String(a).localeCompare(String(b), "es")),
+    }),
+    [catalogos]
+  );
 
-    return comparatorSourceRows.filter((item) => {
-      if (
-        comparatorFiltersApplied.provincia?.length &&
-        !comparatorFiltersApplied.provincia.includes(item.Provincia)
-      ) {
-        return false;
-      }
-      if (
-        comparatorFiltersApplied.ciudad?.length &&
-        !comparatorFiltersApplied.ciudad.includes(item.Ciudad)
-      ) {
-        return false;
-      }
-      if (
-        comparatorFiltersApplied.entidad?.length &&
-        !comparatorFiltersApplied.entidad.includes(item.Entidad)
-      ) {
-        return false;
-      }
-      if (
-        comparatorFiltersApplied.tipo_compra?.length &&
-        !comparatorFiltersApplied.tipo_compra.includes(item.T_Compra)
-      ) {
-        return false;
-      }
-      if (
-        comparatorFiltersApplied.procedimiento?.length &&
-        !comparatorFiltersApplied.procedimiento.includes(item.Procedimiento)
-      ) {
-        return false;
-      }
+  // Mapea la respuesta del servidor al formato que esperan los gráficos.
+  const comparatorBaseData = useMemo(
+    () =>
+      comparatorAggregatedRows.map((item) => ({
+        name: item.nombre || `Sin ${compareBy.toLowerCase()}`,
+        monto: Number(item.monto_total || 0),
+        registros: Number(item.total_registros || 0),
+        promedio: Number(item.promedio_monto || 0),
+        minimo: Number(item.minimo_monto || 0),
+        maximo: Number(item.maximo_monto || 0),
+        shortName: truncateLabel(item.nombre || "", 20),
+      })),
+    [comparatorAggregatedRows, compareBy]
+  );
 
-      const amount = Number(item.V_Total_Numeric || 0);
-      if (minValue !== null && amount < minValue) return false;
-      if (maxValue !== null && amount > maxValue) return false;
-
-      if (startDate || endDate) {
-        const rowDate = item.Fecha_Carga ? new Date(item.Fecha_Carga) : null;
-        if (!rowDate || Number.isNaN(rowDate.getTime())) return false;
-        if (startDate && rowDate < startDate) return false;
-        if (endDate && rowDate > endDate) return false;
-      }
-
-      return true;
-    });
-  }, [comparatorFiltersApplied, comparatorSourceRows]);
-
-  const comparatorBaseData = useMemo(() => {
-    const grouped = new Map();
-
-    for (const item of comparatorFilteredRows) {
-      let key = item?.[compareBy];
-      if (compareBy === "Anio") {
-        key = String(item?.Fecha_Carga || "").slice(0, 4);
-      }
-      if (compareBy === "Mes") {
-        key = String(item?.Fecha_Carga || "").slice(0, 7);
-      }
-
-      key = key || `Sin ${compareBy.toLowerCase()}`;
-      const previous = grouped.get(key) || {
-        name: key,
-        monto: 0,
-        registros: 0,
-        maximo: 0,
-        minimo: Number.POSITIVE_INFINITY,
-      };
-      const monto = Number(item.V_Total_Numeric || 0);
-      grouped.set(key, {
-        name: key,
-        monto: previous.monto + monto,
-        registros: previous.registros + 1,
-        maximo: Math.max(previous.maximo, monto),
-        minimo: Math.min(previous.minimo, monto),
-      });
-    }
-
-    return [...grouped.values()]
-      .map((item) => ({
-        ...item,
-        promedio: item.registros ? item.monto / item.registros : 0,
-        minimo: Number.isFinite(item.minimo) ? item.minimo : 0,
-        shortName: truncateLabel(item.name, 20),
-      }));
-  }, [compareBy, comparatorFilteredRows]);
+  // Alias mantenido por compatibilidad con código que referencia comparatorFilteredRows.
+  const comparatorFilteredRows = comparatorBaseData;
 
   const handleComparatorListToggle = (field, value) => {
     setComparatorFiltersDraft((prev) => {
@@ -859,8 +783,7 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     [dashboardData?.procedimientos]
   );
 
-  const selectedEntity =
-    filters.entidad || pacData[0]?.Entidad || "Selecciona una entidad en filtros";
+  const selectedEntity = filters.entidad || null;
 
   const localTopEntitiesByProvince = useMemo(() => {
     if (!activeTerritorialProvince) return [];
@@ -1015,6 +938,27 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     });
   };
 
+  const markAllAlertsAsRead = () => {
+    setAlertsHistory((prev) => {
+      const next = prev.map((item) => ({ ...item, read: true }));
+      localStorage.setItem(ALERTS_HISTORY_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const deleteAlert = (id) => {
+    setAlertsHistory((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      localStorage.setItem(ALERTS_HISTORY_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const clearAlertsHistory = () => {
+    setAlertsHistory([]);
+    localStorage.setItem(ALERTS_HISTORY_KEY, JSON.stringify([]));
+  };
+
   const handleClearOneFilter = (key) => {
     const updated = { ...filters };
 
@@ -1086,19 +1030,30 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     setPage(1);
   };
 
-  const addBookmark = (item) => {
-    const next = [
-      ...bookmarks.filter((bookmark) => bookmark.id !== item.id),
-      {
-        id: item.id,
-        entidad: item.Entidad,
-        provincia: item.Provincia,
-        valor: item.V_Total_Numeric,
-      },
-    ];
-
-    setBookmarks(next);
-    localStorage.setItem("pac.bookmarks", JSON.stringify(next));
+  const handleAddBookmark = async (item) => {
+    const alreadyBookmarked = bookmarks.some((b) => b.pac_id === item.id);
+    if (alreadyBookmarked) {
+      apiRemoveBookmark(item.id).catch(() => {});
+      setBookmarks((prev) => prev.filter((b) => b.pac_id !== item.id));
+    } else {
+      apiAddBookmark({
+        pac_id: item.id,
+        Entidad: item.Entidad,
+        Descripcion: item.Descripcion,
+        V_Total_Numeric: item.V_Total_Numeric,
+        Provincia: item.Provincia,
+      }).catch(() => {});
+      setBookmarks((prev) => [
+        ...prev,
+        {
+          pac_id: item.id,
+          Entidad: item.Entidad,
+          Descripcion: item.Descripcion,
+          V_Total_Numeric: item.V_Total_Numeric,
+          Provincia: item.Provincia,
+        },
+      ]);
+    }
   };
 
   const exportTop10Csv = () => {
@@ -1459,6 +1414,16 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
     return () => document.removeEventListener("click", onOutsideClick);
   }, []);
 
+  useEffect(() => {
+    const onOutside = (event) => {
+      if (entitySearchRef.current && !entitySearchRef.current.contains(event.target)) {
+        setShowEntityDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, []);
+
   if (initialLoading) {
     return (
       <div className="page-stack">
@@ -1469,32 +1434,27 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
 
   return (
     <div className="page-stack">
-      <section className="hero-banner">
-        <div>
-          <h2>Plataforma Inteligente de Contratacion Publica</h2>
-          <p>
-            Diseñada para exploracion ejecutiva, seguimiento territorial y decisiones
-            basadas en datos.
-          </p>
+      {["dashboard", "detalle", "territorial", "temporal", "entidad"].includes(activePage) && (
+        <div className="view-metric-bar">
+          <span>Ver por:</span>
+          <div className="metric-toggle-modern">
+            <button
+              className={metric === "monto" ? "active" : ""}
+              onClick={() => setMetric("monto")}
+            >
+              Monto
+            </button>
+            <button
+              className={metric === "registros" ? "active" : ""}
+              onClick={() => setMetric("registros")}
+            >
+              Registros
+            </button>
+          </div>
         </div>
+      )}
 
-        <div className="metric-toggle-modern">
-          <button
-            className={metric === "monto" ? "active" : ""}
-            onClick={() => setMetric("monto")}
-          >
-            Monto
-          </button>
-          <button
-            className={metric === "registros" ? "active" : ""}
-            onClick={() => setMetric("registros")}
-          >
-            Registros
-          </button>
-        </div>
-      </section>
-
-      {activePage !== "configuracion" && activePage !== "comparador" ? (
+      {activePage !== "configuracion" && activePage !== "comparador" && activePage !== "entidad" ? (
         <>
           <FilterPanel
             catalogos={catalogos}
@@ -1513,7 +1473,7 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
         </>
       ) : null}
 
-      {activePage !== "configuracion" && activePage !== "comparador" && filtersWarning ? (
+      {activePage !== "configuracion" && activePage !== "comparador" && activePage !== "entidad" && filtersWarning ? (
         <div className="filters-warning">{filtersWarning}</div>
       ) : null}
 
@@ -1522,7 +1482,7 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
           key={activePage}
           className="page-stack"
         >
-          {hasNoResults ? (
+          {hasNoResults && activePage !== "entidad" ? (
             <EmptyState
               title={
                 activePage === "territorial"
@@ -1583,7 +1543,8 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
                   pageSize={pageSize}
                   onPageChange={setPage}
                   globalSearch={globalSearch}
-                  onAddBookmark={addBookmark}
+                  onAddBookmark={handleAddBookmark}
+                  bookmarkedIds={bookmarks.map((b) => b.pac_id)}
                 />
               </Suspense>
             </>
@@ -1757,7 +1718,7 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
                 </ResponsiveContainer>
               </ChartCard>
 
-              <ChartCard title="Comparativa anual (simulada)">
+              <ChartCard title="Ultimos 12 meses">
                 <ResponsiveContainer width="100%" height={330}>
                   <AreaChart data={temporalData.slice(-12)}>
                     <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
@@ -1787,82 +1748,176 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
           ) : null}
 
           {activePage === "reportes" ? (
-            <section className="reports-grid">
-              <article className="glass-card report-card">
-                <h3>CSV Top 10</h3>
-                <p>
-                  Usa filtros para definir universo y descarga solo los 10 contratos de mayor monto.
-                </p>
-                <button className="primary-btn report-action-btn" onClick={exportTop10Csv}>
-                  <Download size={16} /> CSV Top 10
-                </button>
-              </article>
+            <>
+              {Object.values(filters).some((v) =>
+                Array.isArray(v) ? v.length > 0 : String(v || "").trim() !== ""
+              ) ? (
+                <div
+                  className="glass-card"
+                  style={{
+                    padding: "10px 16px",
+                    fontSize: 13,
+                    color: "var(--text-secondary)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span style={{ color: "var(--accent)", fontWeight: 600 }}>
+                    Filtros activos
+                  </span>
+                  — Los reportes se generaran con el alcance actual de los filtros.
+                  Limpia los filtros para exportar el universo completo.
+                </div>
+              ) : (
+                <div
+                  className="glass-card"
+                  style={{
+                    padding: "10px 16px",
+                    fontSize: 13,
+                    color: "var(--text-secondary)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>
+                    Sin filtros activos
+                  </span>
+                  — Los reportes incluiran todos los registros del sistema.
+                  Aplica filtros arriba para acotar el alcance.
+                </div>
+              )}
+              <section className="reports-grid">
+                <article className="glass-card report-card">
+                  <h3>Top 10 por monto</h3>
+                  <p>
+                    Los 10 contratos de mayor valor segun los filtros activos. Ideal para revision
+                    ejecutiva rapida.
+                  </p>
+                  <button className="primary-btn report-action-btn" onClick={exportTop10Csv}>
+                    <Download size={16} /> CSV Top 10
+                  </button>
+                </article>
 
-              <article className="glass-card report-card">
-                <h3>Excel Completo Filtrado</h3>
-                <p>
-                  Exporta en Excel todos los registros que cumplen los filtros seleccionados.
-                </p>
-                <button className="primary-btn report-action-btn" onClick={exportFullExcel}>
-                  <FileSpreadsheet size={16} /> Excel Completo
-                </button>
-              </article>
+                <article className="glass-card report-card">
+                  <h3>Excel completo filtrado</h3>
+                  <p>
+                    Todos los contratos que cumplen los filtros activos en una hoja de calculo
+                    lista para pivot o analisis.
+                  </p>
+                  <button className="primary-btn report-action-btn" onClick={exportFullExcel}>
+                    <FileSpreadsheet size={16} /> Excel completo
+                  </button>
+                </article>
 
-              <article className="glass-card report-card">
-                <h3>PDF Ejecutivo</h3>
-                <p>
-                  Genera un resumen ejecutivo con KPIs y top entidades segun los filtros activos.
-                </p>
-                <button className="primary-btn report-action-btn" onClick={exportExecutivePdf}>
-                  <FileText size={16} /> PDF Ejecutivo
-                </button>
-              </article>
+                <article className="glass-card report-card">
+                  <h3>Informe PDF ejecutivo</h3>
+                  <p>
+                    Resumen ejecutivo con KPIs, top entidades y graficos. Listo para presentaciones
+                    y auditorias.
+                  </p>
+                  <button className="primary-btn report-action-btn" onClick={exportExecutivePdf}>
+                    <FileText size={16} /> PDF ejecutivo
+                  </button>
+                </article>
 
-              <article className="glass-card report-card">
-                <h3>Exportar Dashboard</h3>
-                <p>
-                  Descarga en CSV el dataset filtrado para analisis adicional fuera de la plataforma.
-                </p>
-                <button className="primary-btn report-action-btn" onClick={exportDashboardCsv}>
-                  <Download size={16} /> CSV Dashboard
-                </button>
-              </article>
-            </section>
+                <article className="glass-card report-card">
+                  <h3>CSV para analisis externo</h3>
+                  <p>
+                    Dataset filtrado en formato CSV plano. Compatible con Python, R, Power BI o
+                    cualquier herramienta externa.
+                  </p>
+                  <button className="primary-btn report-action-btn" onClick={exportDashboardCsv}>
+                    <Download size={16} /> CSV dataset
+                  </button>
+                </article>
+              </section>
+            </>
           ) : null}
 
           {activePage === "insights" ? (
             <>
               <section className="glass-card insight-controls">
-                <label>
-                  Umbral de alerta ({formatMoney(alertThreshold)})
-                  <input
-                    type="range"
-                    min={10000}
-                    max={2000000}
-                    step={10000}
-                    value={alertThreshold}
-                    onChange={(event) => setAlertThreshold(Number(event.target.value))}
-                  />
-                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
+                  <label style={{ flex: 1, minWidth: 220 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>Umbral de alerta</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>$</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={10000}
+                        value={alertThreshold}
+                        onChange={(event) => setAlertThreshold(Math.max(0, Number(event.target.value) || 0))}
+                        style={{ padding: "7px 10px", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", background: "var(--bg-soft)", color: "var(--text-primary)", fontSize: 14, width: 160 }}
+                      />
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{formatCompactMoney(alertThreshold)}</span>
+                    </div>
+                  </label>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, maxWidth: 340 }}>
+                    Analisis sobre el <strong>dataset completo</strong>, no solo la pagina visible.
+                    {insightsQuery.data ? (
+                      <> Universo: <strong>{Number(insightsQuery.data.total_registros || 0).toLocaleString("es-EC")}</strong> contratos.</>
+                    ) : null}
+                  </p>
+                </div>
               </section>
 
-              <section className="insight-grid">
-                {insights.map((item) => (
-                  <article key={item.id} className={`glass-card insight-card ${item.tone}`}>
-                    <h3>{item.title}</h3>
-                    <strong>{item.value}</strong>
-                    <p>{item.reason}</p>
-                    <p>{item.recommendation}</p>
-                  </article>
-                ))}
-              </section>
+              {insightsQuery.isLoading ? (
+                <section className="insight-grid">
+                  {[1, 2, 3].map((n) => (
+                    <article key={n} className="glass-card insight-card normal" style={{ minHeight: 120, opacity: 0.5 }} />
+                  ))}
+                </section>
+              ) : insightsQuery.data ? (() => {
+                const d = insightsQuery.data;
+                const pctOut = Number(d.pct_outliers || 0);
+                const outlierTone = pctOut > 10 ? "critical" : pctOut > 5 ? "warning" : "positive";
+                const sobreTone = Number(d.total_sobre_umbral || 0) > 0 ? "critical" : "positive";
+                const avgTone = Number(d.avg_monto || 0) > 150000 ? "critical" : "normal";
+                return (
+                  <section className="insight-grid">
+                    <article className={`glass-card insight-card ${outlierTone}`}>
+                      <h3>Outliers de monto (IQR)</h3>
+                      <strong>{Number(d.total_outliers || 0).toLocaleString("es-EC")} contratos</strong>
+                      <p>Umbral estadistico: {formatMoney(d.outlier_limit)}. Representa el {pctOut}% del total.</p>
+                      <p>Q1: {formatMoney(d.q1)} · Q3: {formatMoney(d.q3)} · IQR: {formatMoney(d.iqr)}</p>
+                    </article>
+                    <article className={`glass-card insight-card ${sobreTone}`}>
+                      <h3>Alerta por umbral ({formatCompactMoney(alertThreshold)})</h3>
+                      <strong>{Number(d.total_sobre_umbral || 0).toLocaleString("es-EC")} contratos</strong>
+                      <p>De {Number(d.total_positivos || 0).toLocaleString("es-EC")} contratos con valor positivo.</p>
+                      <p>Ajusta el umbral arriba para focalizar la auditoria.</p>
+                    </article>
+                    <article className={`glass-card insight-card ${avgTone}`}>
+                      <h3>Promedio por contrato</h3>
+                      <strong>{formatMoney(d.avg_monto)}</strong>
+                      <p>Maximo: {formatMoney(d.max_monto)} · Minimo: {formatMoney(d.min_monto)}</p>
+                      <p>Calculado sobre {Number(d.total_registros || 0).toLocaleString("es-EC")} registros del dataset completo.</p>
+                    </article>
+                  </section>
+                );
+              })() : null}
 
               <section className="glass-card insight-history">
                 <header>
                   <h3>Historial de alertas</h3>
-                  <p>
-                    {alertsHistory.filter((item) => !item.read).length} no leidas de {alertsHistory.length}
-                  </p>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <p style={{ margin: 0, fontSize: 13, color: "var(--text-secondary)" }}>
+                      {alertsHistory.filter((item) => !item.read).length} no leidas de {alertsHistory.length}
+                    </p>
+                    {alertsHistory.some((item) => !item.read) && (
+                      <button className="ghost-btn" style={{ fontSize: 12 }} onClick={markAllAlertsAsRead}>
+                        Marcar todas leidas
+                      </button>
+                    )}
+                    {alertsHistory.length > 0 && (
+                      <button className="ghost-btn" style={{ fontSize: 12, color: "var(--danger, #d23f57)" }} onClick={clearAlertsHistory}>
+                        Borrar historial
+                      </button>
+                    )}
+                  </div>
                 </header>
 
                 {alertsHistory.length ? (
@@ -1872,16 +1927,25 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
                         key={alert.id}
                         className={`history-item ${alert.read ? "read" : "unread"}`}
                       >
-                        <div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
                           <strong>{alert.title}</strong>
                           <p>{alert.reason}</p>
                           <small>{new Date(alert.createdAt).toLocaleString("es-EC")}</small>
                         </div>
-                        {!alert.read ? (
-                          <button className="ghost-btn" onClick={() => markAlertAsRead(alert.id)}>
-                            Marcar leida
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                          {!alert.read && (
+                            <button className="ghost-btn" style={{ fontSize: 12 }} onClick={() => markAlertAsRead(alert.id)}>
+                              Leida
+                            </button>
+                          )}
+                          <button
+                            className="ghost-btn"
+                            style={{ fontSize: 12, color: "var(--danger, #d23f57)" }}
+                            onClick={() => deleteAlert(alert.id)}
+                          >
+                            Borrar
                           </button>
-                        ) : null}
+                        </div>
                       </article>
                     ))}
                   </div>
@@ -2040,7 +2104,7 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
                 </button>
               </div>
 
-              {hasComparatorSelection && hasComparatorCharts ? (
+              {hasComparatorCharts ? (
                 <div className="comparator-series-grid">
                   {comparatorSeries.map((series, index) => {
                     const metricConfig = getComparatorMetricConfig(series.metric);
@@ -2198,74 +2262,284 @@ export default function Dashboard({ activePage, globalSearch, onStatsChange }) {
               ) : (
                 <EmptyState
                   title="Aun no hay comparacion"
-                  message="Selecciona filtros, pulsa Aplicar filtros comparador y luego usa Agregar grafica para crear visualizaciones."
+                  message="Usa Agregar grafica para crear visualizaciones. Los filtros son opcionales — sin filtros se compara el universo completo."
                 />
               )}
             </section>
           ) : null}
 
           {activePage === "entidad" ? (
-            <section className="entity-layout">
-              <article className="glass-card entity-profile">
-                <h3>{selectedEntity}</h3>
-                <p>
-                  Perfil dinamico de entidad: comportamiento de montos, presencia territorial
-                  y volumen de contrataciones.
-                </p>
-                <div className="entity-metrics">
-                  <div>
-                    <span>Contratos visibles</span>
-                    <strong>{pacData.length}</strong>
+            <>
+              {/* Dedicated entity search bar */}
+              <section className="glass-card" style={{ padding: "16px 20px" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div ref={entitySearchRef} style={{ flex: 1, minWidth: 260, position: "relative" }}>
+                    <input
+                      value={entitySearchInput}
+                      onChange={(e) => {
+                        setEntitySearchInput(e.target.value);
+                        setShowEntityDropdown(true);
+                      }}
+                      onFocus={() => setShowEntityDropdown(true)}
+                      placeholder="Escribe el nombre de la entidad..."
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        border: "1px solid var(--line)",
+                        borderRadius: "var(--radius-sm)",
+                        background: "var(--bg-soft)",
+                        color: "var(--text-primary)",
+                        fontSize: 14,
+                        boxSizing: "border-box",
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const match = (catalogos?.entidades || []).find(
+                            (ent) => ent.toLowerCase() === entitySearchInput.toLowerCase()
+                          ) || entitySearchInput.trim();
+                          if (match) {
+                            setFilters({ entidad: match });
+                            setEntitySearchInput(match);
+                            setShowEntityDropdown(false);
+                          }
+                        }
+                        if (e.key === "Escape") setShowEntityDropdown(false);
+                      }}
+                    />
+                    {showEntityDropdown && entitySearchInput.length >= 2 && (() => {
+                      const opts = (catalogos?.entidades || [])
+                        .filter((e) => e.toLowerCase().includes(entitySearchInput.toLowerCase()))
+                        .slice(0, 20);
+                      if (!opts.length) return null;
+                      return (
+                        <div style={{
+                          position: "absolute",
+                          top: "100%",
+                          left: 0,
+                          right: 0,
+                          zIndex: 9000,
+                          background: "var(--bg-panel)",
+                          border: "1px solid var(--line)",
+                          borderRadius: "var(--radius-sm)",
+                          boxShadow: "0 8px 32px rgba(0,0,0,0.35)",
+                          maxHeight: 320,
+                          overflowY: "auto",
+                          marginTop: 4,
+                        }}>
+                          {opts.map((ent) => (
+                            <div
+                              key={ent}
+                              onMouseDown={() => {
+                                setFilters({ entidad: ent });
+                                setEntitySearchInput(ent);
+                                setShowEntityDropdown(false);
+                              }}
+                              style={{
+                                padding: "10px 14px",
+                                fontSize: 13,
+                                cursor: "pointer",
+                                borderBottom: "1px solid var(--line)",
+                                color: "var(--text-primary)",
+                                whiteSpace: "normal",
+                                wordBreak: "break-word",
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = "var(--bg-soft)"}
+                              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                            >
+                              {ent}
+                            </div>
+                          ))}
+                          {(catalogos?.entidades || []).filter((e) => e.toLowerCase().includes(entitySearchInput.toLowerCase())).length > 20 && (
+                            <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--text-secondary)", fontStyle: "italic" }}>
+                              Refinando mas la busqueda para ver el resto...
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
-                  <div>
-                    <span>Monto acumulado</span>
-                    <strong>
-                      {formatMoney(
-                        pacData.reduce(
-                          (acc, item) => acc + Number(item.V_Total_Numeric || 0),
-                          0
-                        )
-                      )}
-                    </strong>
-                  </div>
+                  <button
+                    style={{
+                      padding: "10px 20px",
+                      background: "var(--accent)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "var(--radius-sm)",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      fontSize: 14,
+                      whiteSpace: "nowrap",
+                    }}
+                    onClick={() => {
+                      const match = (catalogos?.entidades || []).find(
+                        (ent) => ent.toLowerCase() === entitySearchInput.toLowerCase()
+                      ) || entitySearchInput.trim();
+                      if (match) {
+                        setFilters({ entidad: match });
+                        setEntitySearchInput(match);
+                        setShowEntityDropdown(false);
+                      }
+                    }}
+                  >
+                    Buscar entidad
+                  </button>
+                  {selectedEntity && (
+                    <button
+                      className="ghost-btn"
+                      onClick={() => {
+                        setFilters({});
+                        setEntitySearchInput("");
+                        setShowEntityDropdown(false);
+                      }}
+                    >
+                      Limpiar
+                    </button>
+                  )}
                 </div>
-              </article>
+                {!selectedEntity && (
+                  <p style={{ margin: "8px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
+                    {(catalogos?.entidades || []).length > 0
+                      ? `${(catalogos?.entidades || []).length} entidades disponibles. Escribe al menos 2 caracteres para filtrar.`
+                      : "Escribe el nombre de la entidad contratante."}
+                  </p>
+                )}
+              </section>
 
-              <article className="glass-card chart-card-modern">
-                <header>
-                  <h3>Distribucion por procedimiento</h3>
-                </header>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={entityProcedureData}>
-                    <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
-                    <XAxis
-                      dataKey="procedimiento_corto"
-                      interval={0}
-                      angle={-16}
-                      textAnchor="end"
-                      height={72}
-                    />
-                    <YAxis
-                      tickFormatter={(value) =>
-                        metric === "monto" ? formatCompactMoney(value) : formatCompactNumber(value)
-                      }
-                    />
-                    <Tooltip
-                      labelFormatter={(_, payload) => payload?.[0]?.payload?.Procedimiento || ""}
-                      formatter={(value) =>
-                        metric === "monto"
-                          ? [formatCompactMoney(value), "Monto total"]
-                          : [Number(value || 0).toLocaleString("es-EC"), "Total registros"]
-                      }
-                    />
-                    <Bar
-                      dataKey={metric === "monto" ? "monto_total" : "total_registros"}
-                      fill="#E75E0D"
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </article>
-            </section>
+              {!selectedEntity ? (
+                <EmptyState
+                  title="Busca una entidad"
+                  message="Escribe el nombre de la entidad contratante en el buscador y pulsa 'Buscar entidad' para ver su perfil completo."
+                />
+              ) : hasNoResults ? (
+                <EmptyState
+                  title={`Sin datos para "${selectedEntity}"`}
+                  message="No se encontraron contratos para esta entidad con los filtros actuales. Verifica el nombre o intenta con otra entidad."
+                />
+              ) : (() => {
+                const entityMontoTotal = pacData.reduce((acc, item) => acc + Number(item.V_Total_Numeric || 0), 0);
+                const entityMontoMax = pacData.length ? Math.max(...pacData.map((item) => Number(item.V_Total_Numeric || 0))) : 0;
+                const entityMontoMin = pacData.length ? Math.min(...pacData.filter((item) => Number(item.V_Total_Numeric || 0) > 0).map((item) => Number(item.V_Total_Numeric || 0))) : 0;
+                const entityProvincias = [...new Set(pacData.map((item) => item.Provincia).filter(Boolean))];
+                const entityCiudades = [...new Set(pacData.map((item) => item.Ciudad).filter(Boolean))];
+                const entityProcedures = [...new Set(pacData.map((item) => item.Procedimiento).filter(Boolean))];
+                const entityTiposCompra = [...new Set(pacData.map((item) => item.T_Compra).filter(Boolean))];
+                const entityPeriodos = [...new Set(pacData.map((item) => item.Periodo).filter(Boolean))].sort().reverse();
+                return (
+                  <div className="page-stack">
+                    {/* Metrics strip */}
+                    <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+                      {[
+                        { label: "Contratos cargados", value: pacData.length.toLocaleString("es-EC") },
+                        { label: "Monto acumulado", value: formatMoney(entityMontoTotal) },
+                        { label: "Promedio por contrato", value: pacData.length ? formatMoney(entityMontoTotal / pacData.length) : "—" },
+                        { label: "Contrato mas alto", value: formatMoney(entityMontoMax) },
+                        { label: "Contratos minimos", value: entityMontoMin ? formatMoney(entityMontoMin) : "—" },
+                        { label: "Periodos", value: entityPeriodos.length > 0 ? entityPeriodos.slice(0, 3).join(", ") : "—" },
+                      ].map(({ label, value }) => (
+                        <article key={label} className="glass-card" style={{ padding: "14px 16px" }}>
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>{value}</div>
+                        </article>
+                      ))}
+                    </section>
+
+                    {/* Location + procedures info */}
+                    <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+                      <article className="glass-card" style={{ padding: "16px 20px" }}>
+                        <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>Ubicacion</h4>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <div style={{ fontSize: 13 }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Provincias: </span>
+                            <span>{entityProvincias.length ? entityProvincias.join(", ") : "—"}</span>
+                          </div>
+                          <div style={{ fontSize: 13 }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Ciudades: </span>
+                            <span>{entityCiudades.length ? entityCiudades.join(", ") : "—"}</span>
+                          </div>
+                        </div>
+                      </article>
+                      <article className="glass-card" style={{ padding: "16px 20px" }}>
+                        <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>Modalidades</h4>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <div style={{ fontSize: 13 }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Tipos de compra: </span>
+                            <span>{entityTiposCompra.length ? entityTiposCompra.join(", ") : "—"}</span>
+                          </div>
+                          <div style={{ fontSize: 13 }}>
+                            <span style={{ color: "var(--text-secondary)" }}>Procedimientos: </span>
+                            <span>{entityProcedures.length ? `${entityProcedures.length} tipos` : "—"}</span>
+                          </div>
+                        </div>
+                      </article>
+                    </section>
+
+                    {/* Procedure chart */}
+                    <article className="glass-card chart-card-modern">
+                      <header>
+                        <h3>Distribucion por procedimiento</h3>
+                        <p>Desglose de contratos por tipo de procedimiento segun los registros cargados.</p>
+                      </header>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <BarChart data={entityProcedureData} margin={{ top: 8, right: 16, left: 8, bottom: 60 }}>
+                          <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.2} />
+                          <XAxis dataKey="procedimiento_corto" interval={0} angle={-18} textAnchor="end" height={80} tick={{ fontSize: 11 }} />
+                          <YAxis tickFormatter={(value) => metric === "monto" ? formatCompactMoney(value) : formatCompactNumber(value)} />
+                          <Tooltip
+                            labelFormatter={(_, payload) => payload?.[0]?.payload?.Procedimiento || ""}
+                            formatter={(value) => metric === "monto" ? [formatCompactMoney(value), "Monto total"] : [Number(value || 0).toLocaleString("es-EC"), "Total registros"]}
+                          />
+                          <Bar dataKey={metric === "monto" ? "monto_total" : "total_registros"} fill="#E75E0D" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </article>
+
+                    {/* Contracts table */}
+                    <article className="glass-card" style={{ padding: "20px 24px" }}>
+                      <header style={{ marginBottom: 16 }}>
+                        <h3 style={{ margin: 0, fontSize: 17 }}>Contratos ({pacData.length.toLocaleString("es-EC")} registros cargados)</h3>
+                        <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
+                          Muestra los primeros {Math.min(pacData.length, 50)} contratos de la pagina actual. Usa Vista Detallada para busqueda avanzada y exportacion.
+                        </p>
+                      </header>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ borderBottom: "2px solid var(--line)" }}>
+                              {["#", "Nro.", "Descripcion", "Procedimiento", "Tipo compra", "Monto", "Periodo", "Ciudad"].map((h) => (
+                                <th key={h} style={{ textAlign: "left", padding: "8px 10px", color: "var(--text-secondary)", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pacData.slice(0, 50).map((item, idx) => (
+                              <tr key={item.id || idx} style={{ borderBottom: "1px solid var(--line)" }}>
+                                <td style={{ padding: "8px 10px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{idx + 1}</td>
+                                <td style={{ padding: "8px 10px", whiteSpace: "nowrap", color: "var(--text-secondary)" }}>{item.Nro || "—"}</td>
+                                <td style={{ padding: "8px 10px", maxWidth: 320 }}>
+                                  <div style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }} title={item.Descripcion}>
+                                    {item.Descripcion || "—"}
+                                  </div>
+                                </td>
+                                <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{item.Procedimiento || "—"}</td>
+                                <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{item.T_Compra || "—"}</td>
+                                <td style={{ padding: "8px 10px", whiteSpace: "nowrap", fontWeight: 600 }}>{formatMoney(item.V_Total_Numeric)}</td>
+                                <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{item.Periodo || "—"}</td>
+                                <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{item.Ciudad || item.Provincia || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {pacData.length > 50 && (
+                        <p style={{ marginTop: 12, fontSize: 13, color: "var(--text-secondary)", textAlign: "center" }}>
+                          Mostrando 50 de {pacData.length.toLocaleString("es-EC")} contratos. Ve a <strong>Vista Detallada</strong> para ver todos con filtros y exportacion.
+                        </p>
+                      )}
+                    </article>
+                  </div>
+                );
+              })()}
+            </>
           ) : null}
 
           {activePage === "configuracion" ? (

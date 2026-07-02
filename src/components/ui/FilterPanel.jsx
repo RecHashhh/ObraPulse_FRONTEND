@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
+import { getCargasDisponibles } from "../../api/pacApi";
 
 const initialState = {
   provincia: "",
@@ -24,6 +25,22 @@ export default function FilterPanel({
   onLoadView,
 }) {
   const [filters, setFilters] = useState(initialState);
+  const [cargas, setCargas] = useState([]);
+  const [selectedCarga, setSelectedCarga] = useState("");
+
+  useEffect(() => {
+    getCargasDisponibles()
+      .then((data) => {
+        setCargas(data);
+        if (data.length > 0) {
+          // Default to latest load date
+          const latest = data[0].fecha;
+          setSelectedCarga(latest);
+          setFilters((prev) => ({ ...prev, fecha_inicio: latest, fecha_fin: latest }));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -41,6 +58,16 @@ export default function FilterPanel({
     });
   };
 
+  const handleCargaChange = (event) => {
+    const fecha = event.target.value;
+    setSelectedCarga(fecha);
+    if (fecha) {
+      setFilters((prev) => ({ ...prev, fecha_inicio: fecha, fecha_fin: fecha }));
+    } else {
+      setFilters((prev) => ({ ...prev, fecha_inicio: "", fecha_fin: "" }));
+    }
+  };
+
   const applyFilters = () => {
     const clean = Object.fromEntries(
       Object.entries(filters).filter(([, value]) => value !== "")
@@ -50,6 +77,7 @@ export default function FilterPanel({
 
   const handleReset = () => {
     setFilters(initialState);
+    setSelectedCarga("");
     onReset();
   };
 
@@ -63,12 +91,18 @@ export default function FilterPanel({
     onSaveView(name, clean);
   };
 
+  const fmtFecha = (iso) => {
+    if (!iso) return iso;
+    const [y, m, d] = iso.split("-");
+    return `${d}/${m}/${y}`;
+  };
+
   return (
     <section className="glass-card filter-panel">
       <header>
         <div>
           <h2>Filtros Inteligentes</h2>
-          <p>Refina por ubicacion, tipo de compra, procedimiento, fechas y montos.</p>
+          <p>Refina por ubicacion, tipo de compra, procedimiento, carga de datos y montos.</p>
         </div>
 
         <div className="filter-actions">
@@ -155,18 +189,20 @@ export default function FilterPanel({
           ))}
         </select>
 
-        <input
-          type="date"
-          name="fecha_inicio"
-          value={filters.fecha_inicio}
-          onChange={handleChange}
-        />
-        <input
-          type="date"
-          name="fecha_fin"
-          value={filters.fecha_fin}
-          onChange={handleChange}
-        />
+        <select
+          value={selectedCarga}
+          onChange={handleCargaChange}
+          title="Filtrar por fecha de carga de datos"
+          style={{ gridColumn: "span 2" }}
+        >
+          <option value="">Todas las cargas</option>
+          {cargas.map((c, i) => (
+            <option key={c.fecha} value={c.fecha}>
+              {i === 0 ? `${fmtFecha(c.fecha)} — última carga (${c.registros.toLocaleString()} registros)` : `${fmtFecha(c.fecha)} (${c.registros.toLocaleString()} registros)`}
+            </option>
+          ))}
+        </select>
+
         <input
           type="number"
           name="valor_min"

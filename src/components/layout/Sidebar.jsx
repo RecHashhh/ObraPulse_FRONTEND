@@ -1,6 +1,6 @@
 import {
   BarChart3,
-  Bell,
+  Building2,
   Compass,
   FileDown,
   Gauge,
@@ -8,7 +8,9 @@ import {
   Settings,
   Sparkles,
   Table2,
+  Users,
 } from "lucide-react";
+import { useUser } from "../../context/UserContext";
 
 const ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
@@ -18,11 +20,17 @@ const ITEMS = [
   { id: "reportes", label: "Reportes", icon: FileDown },
   { id: "insights", label: "Alertas e Insights", icon: Sparkles },
   { id: "comparador", label: "Comparador", icon: Compass },
-  { id: "entidad", label: "Vista de Entidad", icon: Bell },
+  { id: "entidad", label: "Vista de Entidad", icon: Building2 },
   { id: "configuracion", label: "Configuracion", icon: Settings },
+  { id: "usuarios", label: "Usuarios", icon: Users, adminOnly: true },
 ];
 
 export default function Sidebar({ collapsed, activePage, onSelectPage, onToggle }) {
+  const { appUser } = useUser();
+  const isAdmin = appUser?.rol === "administrador";
+
+  const visibleItems = ITEMS.filter((item) => !item.adminOnly || isAdmin);
+
   return (
     <aside className={`shell-sidebar ${collapsed ? "collapsed" : ""}`}>
       <button className="brand" onClick={onToggle}>
@@ -36,7 +44,7 @@ export default function Sidebar({ collapsed, activePage, onSelectPage, onToggle 
       </button>
 
       <nav className="menu">
-        {ITEMS.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           return (
             <button

@@ -8,6 +8,7 @@ export default function DetailTableBlock({
   onPageChange,
   globalSearch,
   onAddBookmark,
+  bookmarkedIds = [],
 }) {
   return (
     <AdvancedTable
@@ -18,6 +19,7 @@ export default function DetailTableBlock({
       onPageChange={onPageChange}
       globalSearch={globalSearch}
       onAddBookmark={onAddBookmark}
+      bookmarkedIds={bookmarkedIds}
     />
   );
 }
